@@ -17,6 +17,17 @@
 ```bash
 pip install -r requirements.txt
 ```
+---
+
+## Создание дополнительной таблицы статусов 
+
+```bash
+CREATE TABLE arxiv_processing_status (
+    arxiv_id TEXT PRIMARY KEY,
+    status TEXT, 
+    updated_at TIMESTAMP DEFAULT now()
+);
+```
 
 ---
 
