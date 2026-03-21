@@ -74,3 +74,18 @@ python orchestrator.py pdfs/ --out-dir parsed \
 | wheel           | 0.45.1      | Сборка wheel-пакетов              |
 | tqdm            | 4.67.1      | pdf2text (прогресс бар)           |
 
+---
+
+## Запуск с S3:
+```bash
+python orchestrator.py `                                                                                                                                                                                                                                                         
+  --s3-endpoint https://s3.timeweb.com `                                                                                                                                                                                                                                                                          
+  --s3-key ************* `                                                                                                                                                                                                                                                                                
+  --s3-secret ************* `                                                                                                                                                                                                                                                         
+  --s3-bucket ************* `                                                                                                                                                                                                                                                    
+  --pg-host localhost `                                                                                                                                                                                                                                                                                          
+  --pg-db ************* `                                                                                                                                                                                                                                                                                       
+  --pg-user ************* `                                                                                                                                                                                                                                                                                           
+  --pg-password ************* `                                                                                                                                                                                                                                                                                       
+  --limit 5 
+```
