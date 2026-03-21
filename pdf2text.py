@@ -463,7 +463,8 @@ def detect_title_lines_on_first_page(
 
 # ---------------------------- Основной конвертер pdf -> text ----------------------------
 def convert_pdf_to_text(
-    pdf_path: str,
+    # pdf_path: str,
+    pdf_input,
     tokenize_nums: bool = False,
     return_mapping: bool = True,
     debug: bool = False,
@@ -480,7 +481,11 @@ def convert_pdf_to_text(
     debug - включить встраиваемые debug
     """
     logger = logging.getLogger("pdf2text")
-    doc = fitz.open(pdf_path) # открываем PDF через PyMuPDF
+    # doc = fitz.open(pdf_path) # открываем PDF через PyMuPDF
+    if isinstance(pdf_input, (bytes, bytearray)):
+        doc = fitz.open(stream=pdf_input, filetype="pdf")
+    else:
+        doc = fitz.open(pdf_input)
     num_map: Dict[str, str] = {} if tokenize_nums else {}
 
     # предварительно обнаружим title-строки на первой странице
