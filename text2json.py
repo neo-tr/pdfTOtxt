@@ -1,7 +1,3 @@
-"""
-Конвертирует текстовые файлы (после pdf2text.py) в JSON формата:
-"""
-
 import argparse
 import json
 import re
@@ -90,7 +86,7 @@ FORBIDDEN_KEYWORDS = [
 
 def first_page_contains_forbidden(text: str) -> bool:
     """
-    Проверяет первую страницу (первый абзац)
+    Проверяет первую страницу (первый абзац в txt)
     """
     first_page = text.split("\n\n", 1)[0].lower()
     return any(word in first_page for word in FORBIDDEN_KEYWORDS)
@@ -317,11 +313,7 @@ def normalize_sub_sup(s: str) -> str:
         s
     )
 
-def extract_materials(
-    text: str,
-    with_counts: bool = True,
-    main_only: bool = True
-):
+def extract_materials(text: str, with_counts: bool = True, main_only: bool = True):
 
     materials: dict[str, int] = {}
 
@@ -397,7 +389,7 @@ def extract_debye_frequency(text: str) -> list[float]:
 
 def extract_payload_stub(text: str) -> dict:
     return {
-        "material": extract_materials(text, with_counts=True, main_only=False),
+        "material": extract_materials(text, with_counts=False, main_only=True),
         "tc_K": extract_tc_K(text),
         "dimensionality": extract_dimensionality(text),
         "type": extract_article_type(text),
@@ -457,7 +449,6 @@ def main():
     parser.add_argument("--debug", action="store_true")
 
     args = parser.parse_args()
-  
     inp = Path(args.input)
 
     if not inp.exists():
