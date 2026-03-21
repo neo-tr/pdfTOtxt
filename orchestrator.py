@@ -1,115 +1,237 @@
 import argparse
-import subprocess
-import sys
+import json
+import logging
+
+import boto3
+import psycopg2
+from psycopg2.extras import execute_batch
+
+from pdf2text import convert_pdf_to_text
+from text2json import (
+    extract_payload_stub,
+    extract_title,
+    extract_arxiv_id,
+    first_page_contains_forbidden,
+    contains_pressure,
+)
+
+# ---------------------------- S3 ----------------------------
+
+def get_s3_client(endpoint, key, secret):
+    return boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=key,
+        aws_secret_access_key=secret,
+    )
+
+
+def list_pdfs(s3, bucket, prefix=""):
+    continuation_token = None
+
+    while True:
+        kwargs = {
+            "Bucket": bucket,
+            "MaxKeys": 1000,
+            "Prefix": prefix,
+        }
+
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+
+        resp = s3.list_objects_v2(**kwargs)
+
+        for obj in resp.get("Contents", []):
+            key = obj["Key"]
+            if key.lower().endswith(".pdf"):
+                yield key
+
+        if resp.get("IsTruncated"):
+            continuation_token = resp.get("NextContinuationToken")
+        else:
+            break
+
+def load_pdf_bytes(s3, bucket, key) -> bytes:
+    obj = s3.get_object(Bucket=bucket, Key=key)
+    return obj["Body"].read()
+
 from pathlib import Path
-import shutil
+
+def key_to_arxiv_id(key: str) -> str:
+    name = Path(key).stem
+
+    # старый стиль: supr-con_9609001 в supr-con/9609001
+    if "_" in name and name.split("_")[0].count("-") > 0:
+        prefix, rest = name.split("_", 1)
+        return f"{prefix}/{rest}"
+
+    return name
 
 
-def process_pdf(pdf: Path, out_dir: Path, converter_script: Path, parser_script: Path,
-                meta_dir: Path | None, no_meta: bool, json_dir):
-    base = pdf.stem
+# ---------------------------- PostgreSQL ----------------------------
 
-    # где сохранить txt
-    out_txt = out_dir / f"{base}.txt"
+def get_pg_conn(host, db, user, password, port):
+    return psycopg2.connect(
+        host=host,
+        dbname=db,
+        user=user,
+        password=password,
+        port=port,
+    )
 
-    # metaout только если meta_dir указан
-    if meta_dir:
-        meta_file = meta_dir / f"{base}_meta.json"
-    else:
-        meta_file = None
-
-
-    # ---------------------------- PDF → TXT -----------------------------
-    cmd = [
-        sys.executable,
-        str(converter_script),
-        str(pdf),
-        "--out", str(out_txt)
-    ]
-
-    if meta_file and not no_meta:
-        cmd += ["--metaout", str(meta_file)]
-
-    if no_meta:
-        cmd.append("--no-meta")
-
-    subprocess.run(cmd, check=True)
+def update_payload(conn, rows):
+    with conn.cursor() as cur:
+        execute_batch(
+            cur,
+            """
+            UPDATE arxiv_paper
+            SET payload = %s::jsonb
+            WHERE arxiv_id = %s
+            """,
+            [(payload, arxiv_id) for arxiv_id, payload in rows],
+            page_size=50,
+        )
+    conn.commit()
 
 
-    # ---------------------------- TXT → JSON -----------------------------
-    cmd = [
-        sys.executable,
-        str(parser_script),
-        str(out_txt),
-        "--out-dir", str(json_dir)
-    ]
+def update_status(conn, arxiv_id, status):
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO arxiv_processing_status (arxiv_id, status)
+            VALUES (%s, %s)
+            ON CONFLICT (arxiv_id)
+            DO UPDATE SET
+                status = EXCLUDED.status,
+                updated_at = now()
+        """, (arxiv_id, status))
+    conn.commit()
 
-    subprocess.run(cmd, check=True)
 
+# ---------------------------- Нормализация ----------------------------
+
+def normalize_payload(p):
+    return {
+        "tc_K": p.get("tc_K"),
+        "type": p.get("type"),
+        "material": p.get("material") or {},
+        "dimensionality": p.get("dimensionality"),
+        "unconventional": p.get("unconventional"),
+        "debye_frequency": p.get("debye_frequency") or [],
+    }
+
+
+# ---------------------------- Обработка ----------------------------
+
+def process_pdf_bytes(pdf_bytes: bytes):
+
+    text, _ = convert_pdf_to_text(pdf_bytes)
+
+    payload = extract_payload_stub(text)
+
+    return {
+        "text": text,
+        "payload": normalize_payload(payload),
+        "id": extract_arxiv_id(text),
+        "title": extract_title(text),
+    }
+
+
+# ---------------------------- MAIN ----------------------------
 
 def main():
-    p = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser()
 
-    p.add_argument("pdf_dir", help="directory containing PDF files")
-    p.add_argument("--out-dir", required=True, help="directory for txt + json output")
-    p.add_argument("--converter", default="pdf2text.py", help="PDF → TXT script")
-    p.add_argument("--parser", default="text2json.py", help="TXT → JSON script")
+    # --- S3 ---
+    parser.add_argument("--s3-endpoint", required=True)
+    parser.add_argument("--s3-key", required=True)
+    parser.add_argument("--s3-secret", required=True)
+    parser.add_argument("--s3-bucket", required=True)
+    parser.add_argument("--s3-prefix", default="pdf/")
 
-    # если указано, пишем
-    p.add_argument("--metaout", help="directory for metadata JSONs")
+    # --- Postgres ---
+    parser.add_argument("--pg-host", required=True)
+    parser.add_argument("--pg-db", required=True)
+    parser.add_argument("--pg-user", required=True)
+    parser.add_argument("--pg-password", required=True)
+    parser.add_argument("--pg-port", default=5432)
 
-    # удалить txt после окончания
-    p.add_argument("--delete-txt", action="store_true")
+    parser.add_argument("--batch-size", type=int, default=20)
+    parser.add_argument("--limit", type=int, default=None)
 
-    p.add_argument("--no-meta", action="store_true")
+    args = parser.parse_args()
 
-    args = p.parse_args()
+    # print(args)
 
-    pdf_dir = Path(args.pdf_dir)
+    logging.basicConfig(level=logging.INFO)
+    log = logging.getLogger("orchestrator")
 
-    converter_script = Path(args.converter)
-    parser_script = Path(args.parser)
+    # init
+    s3 = get_s3_client(args.s3_endpoint, args.s3_key, args.s3_secret)
+    conn = get_pg_conn(args.pg_host, args.pg_db, args.pg_user, args.pg_password, args.pg_port)
 
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    buffer = []
+    processed = 0
 
-    # JSON всегда лежат в поддиректории out_dir/json
-    json_dir = out_dir / "json"
-    json_dir.mkdir(parents=True, exist_ok=True)
+    for key in list_pdfs(s3, args.s3_bucket, args.s3_prefix):
 
-    # если указал директорию для меты
-    if args.metaout:
-        meta_dir = Path(args.metaout)
-        meta_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        meta_dir = None
+        arxiv_id = key_to_arxiv_id(key)
 
-    # обрабатываем без подпапок
-    pdfs = sorted(pdf_dir.glob("*.pdf"))
+        try:
+            log.info(f"Processing: {key} → {arxiv_id}")
 
-    for pdf in pdfs:
-        process_pdf(
-            pdf=pdf,
-            out_dir=out_dir,
-            converter_script=converter_script,
-            parser_script=parser_script,
-            meta_dir=meta_dir,
-            no_meta=args.no_meta,
-            json_dir=json_dir
-        )
+            update_status(conn, arxiv_id, "new")
 
+            pdf_bytes = load_pdf_bytes(s3, args.s3_bucket, key)
 
-    # ---------------------------- DELETE TXT если флаг -----------------------------
-    if args.delete_txt:
-        for txt in out_dir.glob("*.txt"):
-            txt.unlink()
+            text, _ = convert_pdf_to_text(pdf_bytes)
 
-        # если пусто, можно удалить саму папку
-        if not any(out_dir.iterdir()):
-            try:
-                out_dir.rmdir()
-            except:
-                pass
+            # --- фильтры ---
+            if first_page_contains_forbidden(text):
+                log.info(f"FAILED (forbidden): {arxiv_id}")
+                update_status(conn, arxiv_id, "filtered_firstPage")
+                continue
+
+            if contains_pressure(text):
+                log.info(f"FAILED (pressure): {arxiv_id}")
+                update_status(conn, arxiv_id, "filtered_pressure")
+                continue
+
+            payload = normalize_payload(extract_payload_stub(text))
+
+            buffer.append((
+                arxiv_id,
+                json.dumps(payload),
+            ))
+
+            # --- update ---
+            if len(buffer) >= args.batch_size:
+                update_payload(conn, buffer)
+
+                for aid, _ in buffer:
+                    update_status(conn, aid, "done")
+
+                log.info(f"Updated batch: {len(buffer)}")
+                buffer.clear()
+
+            processed += 1
+
+            if args.limit and processed >= args.limit:
+                break
+
+        except Exception as e:
+            log.exception(f"Error processing {key}: {e}")
+            update_status(conn, arxiv_id, "failed")
+
+    if buffer:
+        update_payload(conn, buffer)
+
+        for aid, _ in buffer:
+            update_status(conn, aid, "done")
+
+        log.info(f"Updated final batch: {len(buffer)}")
+
+    conn.close()
+    log.info("Done")
 
 
 if __name__ == "__main__":
