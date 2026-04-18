@@ -184,7 +184,7 @@ def extract_dimensionality(text: str) -> str:
     has_bulk = bool(BULK_RE.search(text))
 
     if has_2d and has_bulk:
-        return ""
+        return "mix of dimension"
 
     if has_2d:
         return "2D"
@@ -192,9 +192,163 @@ def extract_dimensionality(text: str) -> str:
     if has_bulk:
         return "Bulk"
 
-    return ""
+    return "Bulk"
 
 # ------------------------ Материал ------------------------
+# CHEM_ELEMENTS = {
+#     "H","He","Li","Be","B","C","N","O","F","Ne",
+#     "Na","Mg","Al","Si","P","S","Cl","Ar",
+#     "K","Ca","Sc","Ti","V","Cr","Mn","Fe","Co","Ni","Cu","Zn",
+#     "Ga","Ge","As","Se","Br","Kr",
+#     "Rb","Sr","Y","Zr","Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd",
+#     "In","Sn","Sb","Te","I","Xe",
+#     "Cs","Ba","La","Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy",
+#     "Ho","Er","Tm","Yb","Lu",
+#     "Hf","Ta","W","Re","Os","Ir","Pt","Au","Hg",
+#     "Tl","Pb","Bi","Po","At","Rn",
+#     "Fr","Ra","Ac","Th","Pa","U","Np","Pu","Am","Cm","Bk","Cf",
+#     "Es","Fm","Md","No","Lr",
+#     "Rf","Db","Sg","Bh","Hs","Mt","Ds","Rg","Cn",
+#     "Nh","Fl","Mc","Lv","Ts","Og"
+# }
+#
+# SC_CONTEXT = {
+#     "superconduct",
+#     "Tc",
+#     "transition temperature",
+#     "pairing",
+#     "gap",
+#     "film",
+#     "bulk",
+#     "monolayer",
+#     "system",
+#     "heterostructure",
+#     "interface",
+# }
+#
+# LIGHT_ELEMENTS = {"H", "C", "N", "O", "F", "P", "S"}
+#
+# COMMON_BINARIES = {
+#     "CN", "ON", "NO", "CO", "PC", "PN", "SN",
+#     "UV", "IR", "RF"
+# }
+#
+# ELEMENT_RE = r"(?:{})".format("|".join(sorted(CHEM_ELEMENTS, key=len, reverse=True)))
+#
+# SUB = r"<sub>[^<]+</sub>"
+# SUP = r"<sup>[^<]+</sup>"
+#
+# INDEX = rf"(?:\s*{SUB}|\s*{SUP}|\d+)"
+#
+# FORMULA_CORE = rf"""
+# {ELEMENT_RE}
+# (?:{ELEMENT_RE}|{INDEX}|[-xXδ±])*
+# """
+#
+# LEFT_BOUNDARY  = r"(?<![A-Za-z])"
+# RIGHT_BOUNDARY = r"(?![A-Za-z])"
+#
+# MATERIAL_RE = re.compile(
+#     rf"""
+#     {LEFT_BOUNDARY}
+#     (?P<material>
+#         {FORMULA_CORE}
+#         (?:\s*/\s*{FORMULA_CORE})*
+#     )
+#     {RIGHT_BOUNDARY}
+#     """,
+#     re.X
+# )
+#
+#
+# ELEMENT_TOKEN_RE = re.compile(ELEMENT_RE)
+#
+# def extract_elements(formula: str) -> set[str]:
+#     return set(ELEMENT_TOKEN_RE.findall(formula))
+#
+# def count_sc_context(text: str, material: str, window: int = 80) -> int:
+#
+#     count = 0
+#
+#     for m in re.finditer(re.escape(material), text):
+#         start = max(0, m.start() - window)
+#         end = min(len(text), m.end() + window)
+#         context = text[start:end].lower()
+#
+#         if any(k in context for k in SC_CONTEXT):
+#             count += 1
+#
+#     return count
+#
+#
+# def is_real_material(text: str, formula: str) -> bool:
+#     # простая химическая валидность
+#     if not is_valid_material_formula(formula):
+#         return False
+#
+#     # должен встретиться хотя бы 1 раз в SC-контексте
+#     sc_hits = count_sc_context(text, formula)
+#
+#     return sc_hits > 0
+#
+#
+# def is_valid_material_formula(formula: str) -> bool:
+#     elements = extract_elements(formula)
+#
+#     if len(elements) < 2:
+#         return False
+#
+#     if formula in COMMON_BINARIES:
+#         return False
+#
+#     if all(el in LIGHT_ELEMENTS for el in elements):
+#         return False
+#
+#     return True
+#
+# def normalize_sub_sup(s: str) -> str:
+#     return re.sub(
+#         r"<(sub|sup)>\s*(.*?)\s*</\1>",
+#         r"<\1>\2</\1>",
+#         s
+#     )
+#
+# def extract_materials(text: str, with_counts: bool = True, main_only: bool = True):
+#
+#     materials: dict[str, int] = {}
+#
+#     for m in MATERIAL_RE.finditer(text):
+#         mat = re.sub(r"\s+", " ", m.group("material")).strip()
+#         mat = normalize_sub_sup(mat)
+#
+#         if not is_valid_material_formula(mat):
+#             continue
+#
+#         count = count_sc_context(text, mat)
+#         if count <= 0:
+#             continue
+#
+#         materials[mat] = materials.get(mat, 0) + count
+#
+#     if not materials:
+#         return {} if with_counts else []
+#
+#     if main_only:
+#         main_material = max(materials, key=materials.get)
+#         if with_counts:
+#             return {main_material: materials[main_material]}
+#         else:
+#             return [main_material]
+#
+#     if with_counts:
+#         return materials
+#     else:
+#         return sorted(materials.keys())
+
+
+import re
+
+# --- 1. Элементы ---
 CHEM_ELEMENTS = {
     "H","He","Li","Be","B","C","N","O","F","Ne",
     "Na","Mg","Al","Si","P","S","Cl","Ar",
@@ -212,139 +366,400 @@ CHEM_ELEMENTS = {
     "Nh","Fl","Mc","Lv","Ts","Og"
 }
 
-SC_CONTEXT = {
-    "superconduct",
-    "Tc",
-    "transition temperature",
-    "pairing",
-    "gap",
-    "film",
-    "bulk",
-    "monolayer",
-    "system",
-    "heterostructure",
-    "interface",
-}
+# сортировка важна!
+ELEMENT_PATTERN = "|".join(sorted(CHEM_ELEMENTS, key=len, reverse=True))
 
-LIGHT_ELEMENTS = {"H", "C", "N", "O", "F", "P", "S"}
+# --- 2. HTML индексы ---
+SUB = r"<sub>\d+[a-zA-Z\-xXδ]*</sub>"
+SUP = r"<sup>\d+[+\-]?</sup>"
 
-COMMON_BINARIES = {
-    "CN", "ON", "NO", "CO", "PC", "PN", "SN",
-    "UV", "IR", "RF"
-}
+INDEX = rf"(?:{SUB}|{SUP}|\d+)"
 
-ELEMENT_RE = r"(?:{})".format("|".join(sorted(CHEM_ELEMENTS, key=len, reverse=True)))
-
-SUB = r"<sub>[^<]+</sub>"
-SUP = r"<sup>[^<]+</sup>"
-
-INDEX = rf"(?:\s*{SUB}|\s*{SUP}|\d+)"
-
-FORMULA_CORE = rf"""
-{ELEMENT_RE}
-(?:{ELEMENT_RE}|{INDEX}|[-xXδ±])*
+# --- 3. основной блок формулы ---
+# FORMULA_UNIT = rf"(?:{ELEMENT_PATTERN})(?:\s*{INDEX})?"
+FORMULA_UNIT = rf"""
+(?:{ELEMENT_PATTERN})(?:\s*{INDEX})?
+| δ
+| x
+| y
 """
 
-LEFT_BOUNDARY  = r"(?<![A-Za-z])"
-RIGHT_BOUNDARY = r"(?![A-Za-z])"
+FORMULA_PATTERN = rf"""
+{FORMULA_UNIT}
+(?:\s*[-+xXδ±]?\s*{FORMULA_UNIT})*
+"""
 
-MATERIAL_RE = re.compile(
-    rf"""
-    {LEFT_BOUNDARY}
-    (?P<material>
-        {FORMULA_CORE}
-        (?:\s*/\s*{FORMULA_CORE})*
-    )
-    {RIGHT_BOUNDARY}
-    """,
-    re.X
+# гетероструктуры
+FULL_FORMULA_PATTERN = rf"""
+(?<![A-Za-z0-9])
+(
+    {FORMULA_PATTERN}
+    (?:\s*/\s*{FORMULA_PATTERN})*
 )
+"""
+
+def expand_formula(text: str, start: int, end: int) -> str:
+    i = end
+    n = len(text)
+
+    depth = 0
+
+    while i < n:
+        c = text[i]
+
+        # --- СКОБКИ ---
+        if c == "(":
+            depth += 1
+            i += 1
+            continue
+
+        elif c == ")":
+            # если скобка лишняя в старте — стоп
+            if depth == 0:
+                break
+
+            depth -= 1
+            i += 1
+            continue
+
+        # --- HTML ТЕГИ  ---
+        if text[i:i + 5].lower() in {"<sub>", "<sup>"}:
+            tag = text[i:i + 5].lower()
+            close_tag = "</sub>" if tag == "<sub>" else "</sup>"
+
+            j = i + 5
+            while j < n and text[j:j + len(close_tag)].lower() != close_tag:
+                j += 1
+
+            if j < n:
+                j += len(close_tag)
+                i = j
+                continue
+            else:
+                break
+
+        # --- РАЗРЕШЁННЫЕ СИМВОЛЫ ---
+        if c.isdigit():
+            i += 1
+            continue
+
+        if c in "-+/=−":  # минус точка
+            i += 1
+            continue
+
+        if c in {"δ", "x", "y"}:
+            i += 1
+            continue
 
 
-ELEMENT_TOKEN_RE = re.compile(ELEMENT_RE)
+        # # греческие буквы (кроме δ)
+        if c in {"Γ", "Δ", "Λ", "Ω"}:
+            break
+
+        # --- ЭЛЕМЕНТ ---
+        if c.isupper():
+            # допускаем элемент: Fe, Cu, Sr
+            if i + 1 < n and text[i+1].islower():
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if text[i] in {" ", "\n"}:
+            i += 1
+            continue
+
+        if text[i] in {"-", "+", "−"}:
+            i += 1
+            continue
+
+        # остальное — стоп
+        break
+
+    return text[start:i]
+
+MATERIAL_RE = re.compile(FULL_FORMULA_PATTERN, re.X)
+
+def restore_subscripts(text: str) -> str:
+    return re.sub(
+        r"([A-Z][a-z]?)(\d+)",
+        r"\1<sub>\2</sub>",
+        text
+    )
+
+def normalize_formula_indices(s: str) -> str:
+    # --- 1. объединяем 2 - x → 2-x внутрь sub ---
+    s = re.sub(
+        r"<sub>(\d+)</sub>-([a-z])",
+        r"<sub>\1-\2</sub>",
+        s
+    )
+
+    # --- 2. Mx → M<sub>x</sub> ---
+    s = re.sub(
+        r"([A-Z])([xyz])\b",
+        r"\1<sub>\2</sub>",
+        s
+    )
+
+    # --- 3. O<sub>8</sub>+δ → O<sub>8+δ</sub> ---
+    s = re.sub(
+        r"<sub>(\d+)</sub>\+δ",
+        r"<sub>\1+δ</sub>",
+        s
+    )
+
+    # O<sub>7</sub><sub>δ</sub> → O<sub>7-δ</sub>
+    s = re.sub(
+        r"<sub>(\d+)</sub>\s*<sub>(δ)</sub>",
+        r"<sub>\1-δ</sub>",
+        s
+    )
+
+    return s
+
+# --- 4. нормализация ---
+def normalize_text(text: str) -> str:
+    text = re.sub(r"<(sub|sup)>\s*(.*?)\s*</\1>", r"<\1>\2</\1>", text)
+
+    text = re.sub(r"([A-Za-z])\s+(<sub>\d+</sub>)", r"\1\2", text)
+
+    text = re.sub(r"(</sub>|</sup>)\s+([A-Z])", r"\1\2", text)
+
+    text = re.sub(r"([A-Z][a-z]?)\s+(\d+)", r"\1\2", text)
+
+    # Bi 2 → Bi2
+    text = re.sub(r"([A-Z][a-z]?)\s+(\d+)", r"\1\2", text)
+
+    # 2 Sr → 2Sr
+    text = re.sub(r"(\d)\s+([A-Z])", r"\1\2", text)
+
+    # 2 − x → 2-x
+    text = re.sub(r"([0-9])\s*[−-]\s*([a-zA-Z])", r"\1-\2", text)
+
+    # x M x → xMx
+    text = re.sub(r"\b([a-z])\s+([A-Z])\s+([a-z])\b", r"\1\2\3", text)
+
+    # O 8 → O8
+    text = re.sub(r"([A-Z])\s+(\d+)", r"\1\2", text)
+
+    # + δ → +δ
+    text = re.sub(r"\+\s+δ", r"+δ", text)
+
+    text = re.sub(r"\s+\)", ")", text)
+
+    text = restore_subscripts(text)
+
+    text = re.sub(r"\s+", " ", text)
+
+    return text
+
+
+# --- 5. извлечение элементов ---
+ELEMENT_TOKEN_RE = re.compile(ELEMENT_PATTERN)
 
 def extract_elements(formula: str) -> set[str]:
     return set(ELEMENT_TOKEN_RE.findall(formula))
 
-def count_sc_context(text: str, material: str, window: int = 80) -> int:
 
-    count = 0
+# --- 6. фильтр формул ---
+# def looks_like_real_formula(formula: str) -> bool:
+#     # должен быть индекс или модификатор
+#     if not re.search(r"\d|<sub>|<sup>|[-xXδ]", formula):
+#         return False
+#
+#     elements = extract_elements(formula)
+#
+#     # минимум 2 элемента
+#     if len(elements) < 2:
+#         return False
+#
+#     # запрещаем чистые аббревиатуры типа BCS
+#     if re.fullmatch(r"[A-Z]{2,4}", formula):
+#         return False
+#
+#     return True
 
-    for m in re.finditer(re.escape(material), text):
-        start = max(0, m.start() - window)
-        end = min(len(text), m.end() + window)
-        context = text[start:end].lower()
+def looks_like_real_formula(formula: str) -> bool:
+    # убираем HTML
+    clean = re.sub(r"<[^>]+>", "", formula)
 
-        if any(k in context for k in SC_CONTEXT):
-            count += 1
-
-    return count
-
-
-def is_real_material(text: str, formula: str) -> bool:
-    # простая химическая валидность
-    if not is_valid_material_formula(formula):
-        return False
-
-    # должен встретиться хотя бы 1 раз в SC-контексте
-    sc_hits = count_sc_context(text, formula)
-
-    return sc_hits > 0
-
-
-def is_valid_material_formula(formula: str) -> bool:
-    elements = extract_elements(formula)
-
+    # --- 1. должны быть элементы ---
+    elements = extract_elements(clean)
     if len(elements) < 2:
         return False
 
-    if formula in COMMON_BINARIES:
+    # --- 2. запрет на слова ---
+    if re.search(r"[A-Z]{3,}", clean):
         return False
 
-    if all(el in LIGHT_ELEMENTS for el in elements):
+    # --- 3. запрет FIG, TABLE и т.д.
+    if re.search(r"\b(FIG|TABLE|EQUATION)\b", clean, re.I):
+        return False
+
+    # --- инициалы ---
+    if re.search(r"(?:[A-Z]\.\s*){2,}", formula):
+        return False
+
+    # # --- физика ---
+    if "=" in formula:
+        return False
+
+    # # --- запятая ---
+    if "," in formula:
+        return False
+
+    # --- 4. должен быть индекс или модификатор
+    if not re.search(r"\d|δ|x|<sub>|<sup>", formula):
+        return False
+
+    # --- 5. не должно быть обычных слов
+    if re.search(r"[a-z]{3,}", clean):
+        return False
+
+    # если индекс 0 → почти всегда мусор
+    if re.search(r"<sub>0</sub>", formula):
         return False
 
     return True
 
-def normalize_sub_sup(s: str) -> str:
-    return re.sub(
-        r"<(sub|sup)>\s*(.*?)\s*</\1>",
-        r"<\1>\2</\1>",
-        s
-    )
+import math
 
-def extract_materials(text: str, with_counts: bool = True, main_only: bool = True):
+MATERIAL_CONTEXT = {
+    "system",
+    "compound",
+    "material",
+    "crystal",
+    "film",
+    "sample",
+    "superconductor",
+}
 
-    materials: dict[str, int] = {}
+BAD_CONTEXT = {
+    "plane",
+    "layer",
+    "surface",
+    "interface",
+}
+
+
+def position_score(start: int, text_len: int) -> float:
+    return 1.0 - (start / text_len)
+
+
+def context_features(text: str, start: int, end: int):
+    window = text[max(0, start - 80): end + 80].lower()
+
+    has_good = any(k in window for k in MATERIAL_CONTEXT)
+    has_bad = any(k in window for k in BAD_CONTEXT)
+
+    return has_good, has_bad
+
+
+def score_formula(formula: str, matches, text: str) -> float:
+    total_score = 0
+
+    for m in matches:
+        start, end = m.span()
+
+        score = 0
+
+        # позиция (самый важный сигнал)
+        score += 2.0 * position_score(start, len(text))
+
+        # контекст
+        has_good, has_bad = context_features(text, start, end)
+
+        if has_good:
+            score += 2.5
+
+        if has_bad:
+            score -= 2.0
+
+        # базовый вклад
+        score += 0.3
+
+        total_score += score
+
+    # небольшой вклад частоты
+    total_score += 0.5 * math.log(1 + len(matches))
+
+    return total_score
+
+def dump_pdf_context(text: str, max_matches: int = 20):
+    with open("pdf_debug.txt", "w", encoding="utf-8") as f:
+        count = 0
+
+        for m in MATERIAL_RE.finditer(text):
+            start, end = m.span(1)
+
+            # широкий контекст (важно!)
+            left = max(0, start - 300)
+            right = min(len(text), end + 300)
+
+            snippet = text[left:right]
+
+            f.write("="*100 + "\n")
+            f.write(f"MATCH: {m.group(1)}\n\n")
+            f.write("CONTEXT:\n")
+            f.write(snippet + "\n")
+
+            count += 1
+            if count >= max_matches:
+                break
+
+# --- 7. извлечение материалов ---
+def extract_materials(
+    text: str,
+    with_counts: bool = True,
+    main_only: bool = False
+):
+    text = re.sub(r"</?TITLE>", "", text)
+    text = normalize_text(text)
+
+    # собираем все матчи по формуле
+    material_matches = {}
 
     for m in MATERIAL_RE.finditer(text):
-        mat = re.sub(r"\s+", " ", m.group("material")).strip()
-        mat = normalize_sub_sup(mat)
+        # formula = m.group(1).strip()
+        start, end = m.span(1)
+        dump_pdf_context(text)
+        formula = expand_formula(text, start, end).strip()
 
-        if not is_valid_material_formula(mat):
+        formula = normalize_formula_indices(formula)
+
+        if not looks_like_real_formula(formula):
             continue
 
-        count = count_sc_context(text, mat)
-        if count <= 0:
-            continue
+        material_matches.setdefault(formula, []).append(m)
 
-        materials[mat] = materials.get(mat, 0) + count
-
-    if not materials:
+    if not material_matches:
         return {} if with_counts else []
 
+    # считаем score для каждой формулы
+    scores = {
+        formula: score_formula(formula, matches, text)
+        for formula, matches in material_matches.items()
+    }
+
+    # сортируем по score
+    sorted_items = sorted(scores.items(), key=lambda x: -x[1])
+
     if main_only:
-        main_material = max(materials, key=materials.get)
+        main_material = sorted_items[0][0]
+
         if with_counts:
-            return {main_material: materials[main_material]}
+            return {main_material: len(material_matches[main_material])}
         else:
             return [main_material]
 
     if with_counts:
-        return materials
+        return {
+            formula: len(material_matches[formula])
+            for formula, _ in sorted_items
+        }
     else:
-        return sorted(materials.keys())
-
+        return [formula for formula, _ in sorted_items]
 
 # ------------------------ Дебаевская частота ------------------------
 
