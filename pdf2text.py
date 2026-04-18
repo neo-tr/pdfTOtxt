@@ -459,7 +459,33 @@ def detect_title_lines_on_first_page(
     return title_ys, title_text, (min_y, max_y)
 
 
+def smart_join_spans(spans):
+    result = ""
+    prev = ""
 
+    for s in spans:
+        if not s:
+            continue
+
+        # если предыдущий и текущий выглядят как часть формулы → НЕ добавляем пробел
+        if (
+            prev and
+            (
+                prev.endswith(">") or prev[-1].isalnum()
+            ) and
+            (
+                s.startswith("<") or s[0].isalnum()
+            )
+        ):
+            result += s
+        else:
+            if result:
+                result += " "
+            result += s
+
+        prev = s
+
+    return result
 
 # ---------------------------- Основной конвертер pdf -> text ----------------------------
 def convert_pdf_to_text(
@@ -558,6 +584,91 @@ def convert_pdf_to_text(
 
         page_lines: List[Tuple[int, float, str]] = []
 
+
+        # NEW PART
+        def group_spans(spans):
+            grouped = []
+            current = []
+            current_type = None
+
+            for txt, typ in spans:
+                if typ == current_type:
+                    current.append(txt)
+                else:
+                    if current:
+                        grouped.append((current_type, "".join(current)))
+                    current = [txt]
+                    current_type = typ
+
+            if current:
+                grouped.append((current_type, "".join(current)))
+
+            return grouped
+
+        def render_grouped_spans(groups):
+            out = ""
+
+            for i, (typ, content) in enumerate(groups):
+                if not content.strip():
+                    continue
+                elif typ == "sup" and not re.search(r"[0-9+\-δ]", content):
+                    continue
+                elif typ == "sub":
+                    part = f"<sub>{content}</sub>"
+                elif typ == "sup":
+                    part = f"<sup>{content}</sup>"
+                else:
+                    part = content
+
+                #  добавляем пробел ТОЛЬКО если это не формула
+                if i > 0:
+                    prev_typ = groups[i - 1][0]
+
+                    if prev_typ == "normal" and typ == "normal":
+                        out += " "
+
+                out += part
+
+            return out
+
+        def fix_sub_sequences(groups):
+            fixed = []
+            i = 0
+
+            while i < len(groups):
+                typ, content = groups[i]
+
+                # ищем паттерн: sub + normal(-) + normal(δ/x)
+                if typ == "sub":
+                    combined = content
+                    j = i + 1
+
+                    while j < len(groups):
+                        next_typ, next_content = groups[j]
+
+                        # если это часть индекса
+                        if next_content in {"-", "−", "+", "δ", "x", "y"}:
+                            combined += next_content
+                            j += 1
+                            continue
+
+                        # если следующий тоже sub
+                        if next_typ == "sub":
+                            combined += next_content
+                            j += 1
+                            continue
+
+                        break
+
+                    fixed.append(("sub", combined))
+                    i = j
+                else:
+                    fixed.append((typ, content))
+                    i += 1
+
+            return fixed
+
+
         def _process_block(block: dict, col_order: int):
             """
             Проход по линиям блока: формируем line_with_tags (с <sup>/<sub>) и собираем в page_lines
@@ -574,23 +685,67 @@ def convert_pdf_to_text(
                 font_sizes_nonzero = [fs for fs in font_sizes if fs and fs > 0]
                 median_font = median(font_sizes_nonzero) if font_sizes_nonzero else 0.0
 
-                assembled_parts: List[str] = []
+                # assembled_parts: List[str] = []
+                assembled_parts = []
                 for s in spans:
                     txt = s.get("text", "") or ""
+
+                    #  УДАЛЯЕМ мусор
+                    txt = txt.strip()
+                    # txt = re.sub(r"\s+", "", txt)
+
+                    #  если пусто → пропускаем
+                    if not txt:
+                        continue
+
+                    #  фильтр "неформульных sup"
+                    if txt in {"*", "†", "‡", "§"}:
+                        continue
+
+                    # #  фильтр одиночных чисел в sup (сноски)
+                    # if txt.isdigit() and len(txt) == 1:
+                    #     continue
                     if txt.strip() == "":
                         continue
                     center = (s["bbox"][1] + s["bbox"][3]) / 2
                     size = s.get("size", median_font) or median_font or 0.0
+                    # if (baseline - center) > SUP_OFFSET_FACTOR * size:
+                    #     assembled_parts.append(f"<sup>{txt}</sup>")
+                    # elif (center - baseline) > SUB_OFFSET_FACTOR * size:
+                    #     assembled_parts.append(f"<sub>{txt}</sub>")
+                    # else:
+                    #     assembled_parts.append(txt)
+
+                    # if (baseline - center) > SUP_OFFSET_FACTOR * size:
+                    #     assembled_parts.append((txt, "sup"))
+                    # elif (center - baseline) > SUB_OFFSET_FACTOR * size:
+                    #     assembled_parts.append((txt, "sub"))
+                    # else:
+                    #     assembled_parts.append((txt, "normal"))
+
                     if (baseline - center) > SUP_OFFSET_FACTOR * size:
-                        assembled_parts.append(f"<sup>{txt}</sup>")
+                        typ = "sup"
+
                     elif (center - baseline) > SUB_OFFSET_FACTOR * size:
-                        assembled_parts.append(f"<sub>{txt}</sub>")
+                        typ = "sub"
+
+                    # # НОВОЕ: логические индексы
+                    # elif txt.strip() in {"-", "−", "+", "δ", "x", "y"}:
+                    #     typ = "sub"
+
                     else:
-                        assembled_parts.append(txt)
+                        typ = "normal"
+
+                    assembled_parts.append((txt, typ))
                 if not assembled_parts:
                     continue
 
-                line_with_tags = " ".join(assembled_parts)
+                groups = group_spans(assembled_parts)
+                groups = fix_sub_sequences(groups)
+                line_with_tags = render_grouped_spans(groups)
+
+                # line_with_tags = " ".join(assembled_parts)
+                # line_with_tags = smart_join_spans(assembled_parts)
                 clean_line = _strip_tags(line_with_tags)
 
                 # TITLE тэг с использованием title_range + fallback по тексту
@@ -647,7 +802,8 @@ def convert_pdf_to_text(
                 _process_block(b, col_order=1)
 
         # сортируем по вертикали и колонке, затем соединяем
-        page_lines_sorted = sorted(page_lines, key=lambda t: (round(t[1], 2), t[0]))
+        # page_lines_sorted = sorted(page_lines, key=lambda t: (round(t[1], 2), t[0]))
+        page_lines_sorted = sorted(page_lines, key=lambda t: (t[0], t[1]))
         lines_text = [tup[2] for tup in page_lines_sorted]
         page_text = _join_lines_preserve_words(lines_text)
         pages_output.append(page_text)
